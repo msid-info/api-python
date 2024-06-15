@@ -1,12 +1,31 @@
 import requests
 import xml.etree.ElementTree as ET
 import json
-from time import sleep
+from typing import Any
+from fastapi import FastAPI
+import re
 
+
+
+from time import time
+def timer_func(func): 
+    # This function shows the execution time of  
+    # the function object passed 
+    def wrap_func(*args, **kwargs): 
+        t1 = time() 
+        result = func(*args, **kwargs) 
+        t2 = time() 
+        print(f'Function {func.__name__!r} executed in {(t2-t1):.4f}s') 
+        return result 
+    return wrap_func 
+
+app = FastAPI()
+
+token = ""
 
 environments = {
     "Global": { # Worldwide
-        "displayName": "Global",
+        "displayName": "Worldwide",
         "loginBase": "https://login.microsoftonline.com",
         "autodiscoverBase": "https://autodiscover-s.outlook.com"
     },
@@ -21,13 +40,85 @@ environments = {
         "autodiscoverBase": "https://autodiscover-s-dod.office365.us",
     },
     "partner.microsoftonline.cn": { # China
-        "displayName": "Office 365 operated by 21Vianet (China)",
+        "displayName": "Microsoft 365 operated by 21Vianet (China)",
         "loginBase": "https://login.partner.microsoftonline.cn", # login.chinacloudapi.cn
         "autodiscoverBase": "https://autodiscover-s.partner.outlook.cn",
     }
 }
 
+throttle_status = {
+    0: "NotThrottled",
+    1: "AadThrottled",
+    2: "MsaThrottled"
+}
 
+credential_type = {
+    0: "None",
+    1: "Password",
+    2: "RemoteNGC",
+    3: "OneTimeCode",
+    4: "Federation",
+    5: "CloudFederation",
+    6: "OtherMicrosoftIdpFederation",
+    7: "Fido",
+    8: "GitHub",
+    9: "PublicIdentifierCode",
+    10: "LinkedIn",
+    11: "RemoteLogin",
+    12: "Google",
+    13: "AccessPass",
+    14: "Facebook",
+    15: "Certificate",
+    16: "OfflineAccount",
+    17: "VerifiableCredential",
+    18: "QrCodePin",
+    1000: "NoPreferredCredential"
+}
+
+domain_type = {
+    1: "Unknown",
+    2: "Consumer",
+    3: "Managed",
+    4: "Federated",
+    5: "CloudFederated"
+}
+
+user_state = {
+    -1: "Unknown",
+    0: "Exists",
+    1: "NotExist",
+    2: "Throttled",
+    4: "Error",
+    5: "ExistsInOtherMicrosoftIDP",
+    6: "ExistsBothIDPs"
+}
+
+
+def get(dictionary: dict | list, key: list[str | int], default: Any = None) -> Any:
+    for k in key:
+        if isinstance(k, int): 
+            # key is int
+            if not isinstance(dictionary, list) :
+                return default
+            if not k < len(dictionary):
+                return default
+
+            dictionary = dictionary[k]
+
+        else:
+            # key is str
+            if not isinstance(dictionary, dict):
+                return default
+            if k not in dictionary:
+                return default
+            
+            dictionary = dictionary[k]
+
+    return dictionary
+
+
+@app.get("/osint/{search_str}")
+@timer_func
 def getTenantInfos(search_str: str) -> dict:
     # check if the search_str is a domain or a username
     if "@" in search_str:
@@ -44,16 +135,35 @@ def getTenantInfos(search_str: str) -> dict:
     res = requests.get(
         url="https://odc.officeapps.live.com/odc/v2.1/federationprovider", 
         params={
-            "domain": domain,
-            "returnDiagnostics": "true",
-            "forceRefresh": "true"
+            "domain": domain
+            # "returnDiagnostics": "true",
+            # "forceRefresh": "true"
         }
     )    
     raw_odc_federationprovider = res.json()
 
+    # check if tenant exists
+    if 'tenantId' not in raw_odc_federationprovider:
+        return {
+            "error": "Tenant not found"
+        }
+
     tenantId = raw_odc_federationprovider["tenantId"]
     env = environments[raw_odc_federationprovider["environment"]]
     #endregion
+
+
+    #region: Tenant Information (Graph API)
+    if env == environments["Global"]:
+        res = requests.get(
+            url=f"https://graph.microsoft.com/v1.0/tenantRelationships/findTenantInformationByTenantId(tenantId='{tenantId}')",
+            headers={
+                "Authorization": f"Bearer {token}"
+            }
+        )
+        raw_tenant_information = res.json()
+    else:
+        raw_tenant_information = {}
 
 
     #region: User Realm V1
@@ -90,11 +200,25 @@ def getTenantInfos(search_str: str) -> dict:
 
     
     #region: credential type
+    # get sCtx value
+    res = requests.get(
+        url=env["loginBase"]
+    )
+    sCtx = re.search(r'"sCtx":"(.*?)"', res.text).group(1)
+
+
     res = requests.post(
         url=f"{env['loginBase']}/common/GetCredentialType",
         json={
             "username": username,
-            "isOtherIdpSupported": True
+            "isOtherIdpSupported": True,
+            "isRemoteNGCSupported": True,
+            "isFidoSupported": True,
+            "isRemoteConnectSupported": True,
+            "isAccessPassSupported": True,
+            "checkPhones": True,
+            "isExternalFederationDisallowed": False,
+            "originalRequest": sCtx
         }
     )
     raw_credential_type = res.json()
@@ -123,7 +247,11 @@ def getTenantInfos(search_str: str) -> dict:
             "Content-Type": "text/xml; charset=utf-8"
         }
     )
-    raw_autodiscover_federationInformation = res.text
+    raw_autodiscover_federation_information = res.text
+
+    root = ET.fromstring(raw_autodiscover_federation_information)
+    domains = [domain.text for domain in root.findall(".//{http://schemas.microsoft.com/exchange/2010/Autodiscover}Domains/{http://schemas.microsoft.com/exchange/2010/Autodiscover}Domain")]
+    domains.sort()
     #endregion
 
 
@@ -135,122 +263,67 @@ def getTenantInfos(search_str: str) -> dict:
     #endregion
 
 
-    # -- Data processing --
-
-    # tenantEnvironment
-    tenantEnvironment = {
-        "tenantRegionScope": raw_openid_configuration["tenant_region_scope"],
-        "tenantRegionSubScope": raw_openid_configuration.get("tenant_region_subscope", None), # only for USGov else None
-        "cloudInstanceDisplayName": env["displayName"],
-        "cloudInstance": raw_openid_configuration["cloud_instance_name"],
-        "audienceUrn": raw_userrealm_v1["cloud_audience_urn"]
-    }
-
-    # federationInfo
-    nameSpaceType = raw_userrealm_v2["NameSpaceType"]
-    federationInfo = None
-    if nameSpaceType == "Federated":
-        federationInfo = {
-            "brandName": raw_userrealm_old["FederationBrandName"],
-            "protocol": raw_userrealm_v2["federation_protocol"],
-            "globalVersion": raw_userrealm_old["FederationGlobalVersion"],
-            "metadataUrl": raw_userrealm_v1["federation_metadata_url"],
-            "activeAuthenticationUrl": raw_userrealm_v1["federation_active_auth_url"]
-        }
-
-
-    # loginExperiences
-    loginExperiences = None
-    if raw_userrealm_v2["TenantBrandingInfo"] is not None:
-        brandingInfo = raw_userrealm_v2["TenantBrandingInfo"][0]
-        loginExperiences = {
-            "local": brandingInfo.get("Locale", None),
-            "bannerLogo": brandingInfo.get("BannerLogo", None),
-            "tileLogo": brandingInfo.get("TileLogo", None),
-            "tileDarkLogo": brandingInfo.get("TileDarkLogo", None),
-            "illustration": brandingInfo.get("Illustration", None),
-            "backgroundColor": brandingInfo.get("BackgroundColor", None),
-            "boilerPlateText": brandingInfo.get("BoilerPlateText", None),
-            "userIdLabel": brandingInfo.get("UserIdLabel", None),
-            "keepMeSignedInDisabled": brandingInfo.get("KeepMeSignedInDisabled", None),
-            "useTransparentLightBox": brandingInfo.get("UseTransparentLightBox", None),
-        }
-
-    
-    # userInfo
-    
-    
-
-    # domains
-    root = ET.fromstring(raw_autodiscover_federationInformation)
-    domains = [domain.text for domain in root.findall(".//{http://schemas.microsoft.com/exchange/2010/Autodiscover}Domains/{http://schemas.microsoft.com/exchange/2010/Autodiscover}Domain")]
-    domains.sort()  # type: ignore
-
-    # data residency
-    dataResidency = None
-    if raw_odc_federationprovider["diagnosticData"]["DsApi"] is not []:
-        
-
-
-
-
-
-
-    #region: User Info
-
-    loginExperiences["IsSignupAllowed"] = (credential_type["IsSignupDisallowed"] == False)
-
-    if username:
-        user_info["Exists"] = (credential_type["IfExistsResult"] == 0)
-        user_info["IsManaged"] = (credential_type["IsUnmanaged"] == False)
-        user_info["ThrottleStatus"] = credential_type["ThrottleStatus"]
-        user_info["HasPassword"] = credential_type["Credentials"]["HasPassword"]
-
-        if "EstsProperties" in credential_type:
-            if "DesktopSsoEnabled" in credential_type["EstsProperties"]:
-                user_info["DesktopSsoEnabled"] = credential_type["DesktopSsoEnabled"]
-    #endregion
-
-
-
-
-
     return {
         "tenantId": tenantId,
-        "tenantEnvironment": tenantEnvironment,
-        "dataResidency": { # not always present
-            "tenantCountryCode": "CH",
-            "tenantTelemetryRegion": "EMEA",
-            "azureAdRegion": "EU",
-            "m365DataBoundary": [
-                "EUDB"
-            ],
-            "defaultMailboxRegion": "CHE",
-            "allowedMailboxRegions": [
-                "CHE"
-            ],
+        "tenantName": get(raw_userrealm_v2, ['FederationBrandName']),
+        "defaultDomain": get(raw_tenant_information, ['defaultDomainName']),
+        "tenantEnvironment": {
+            "tenantRegionScope": get(raw_openid_configuration, ['tenant_region_scope']),
+            "tenantRegionSubScope": get(raw_openid_configuration, ['tenant_region_sub_scope']),
+            "cloudInstanceDisplayName": get(env, ['displayName']),
+            "cloudInstance": get(raw_openid_configuration, ['cloud_instance_name']),
+            "audienceUrn": get(raw_userrealm_v1, ['cloud_audience_urn'])
         },
-        "nameSpaceType": nameSpaceType, # Federated, Managed, CloudFederated???
-        "federationInfo": federationInfo,
-        "loginExperiences": loginExperiences,
+        "nameSpaceType": get(raw_userrealm_v2, ['NameSpaceType']),
+        "federationInfo": {
+            "brandName": get(raw_userrealm_old, ['FederationBrandName']),
+            "protocol": get(raw_userrealm_v2, ['federation_protocol']),
+            "globalVersion": get(raw_userrealm_old, ['FederationGlobalVersion']),
+            "metadataUrl": get(raw_userrealm_v1, ['federation_metadata_url']),
+            "activeAuthenticationUrl": get(raw_userrealm_v1, ['federation_active_auth_url'])
+        },
+        "loginExperiences": {
+            "isSignupAllowed": not get(raw_credential_type, ['IsSignupDisallowed']),
+            "local": get(raw_userrealm_v2, ['TenantBrandingInfo', 0, 'Locale']),
+            "bannerLogo": get(raw_userrealm_v2, ['TenantBrandingInfo', 0, 'BannerLogo']),
+            "tileLogo": get(raw_userrealm_v2, ['TenantBrandingInfo', 0, 'TileLogo']),
+            "tileDarkLogo": get(raw_userrealm_v2, ['TenantBrandingInfo', 0, 'TileDarkLogo']),
+            "illustration": get(raw_userrealm_v2, ['TenantBrandingInfo', 0, 'Illustration']),
+            "backgroundColor": get(raw_userrealm_v2, ['TenantBrandingInfo', 0, 'BackgroundColor']),
+            "boilerPlateText": get(raw_userrealm_v2, ['TenantBrandingInfo', 0, 'BoilerPlateText']),
+            "userIdLabel": get(raw_userrealm_v2, ['TenantBrandingInfo', 0, 'UserIdLabel']),
+            "keepMeSignedInDisabled": get(raw_userrealm_v2, ['TenantBrandingInfo', 0, 'KeepMeSignedInDisabled']),
+            "useTransparentLightBox": get(raw_userrealm_v2, ['TenantBrandingInfo', 0, 'UseTransparentLightBox']),
+        },
         "userInfo": {
-            "username": "admin@ethz.ch",
-            "displayName": "admin@ethz.ch",
-            "authenticationUrl": "https://idbdfedin16.ethz.ch/adfs/ls/?username=admin%40ethz.ch&wa=wsignin1.0&wtrealm=urn%3afederation%3aMicrosoftOnline&wctx=",
-            "userState": 2,
-            "doesExist": True,
-            "isManaged": True,
-            "throttleStatus": 1,
-            "Credentials": {
-                "PrefCredential": 1,
-                "HasPassword": True,
-                "RemoteNgcParams": None,
-                "FidoParams": None,
-                "SasParams": None,
-                "CertAuthParams": None,
-                "GoogleParams": None,
-                "FacebookParams": None,
-                "OtcNotAutoSent": False
+            "username": get(raw_credential_type, ['Username']),
+            "displayName": get(raw_credential_type, ['Display']),
+            "state": user_state[get(raw_credential_type, ['IfExistsResult'])],
+            "isManaged": not get(raw_credential_type, ['IsUnmanaged']),
+            "throttleStatus": throttle_status[get(raw_credential_type, ['ThrottleStatus'])],
+            "credentials": {
+                "preferedCredential": credential_type[get(raw_credential_type, ['Credentials', 'PrefCredential'])],
+                "hasPassword": get(raw_credential_type, ['Credentials', 'HasPassword'], False),
+                "HasAccessPass" : get(raw_credential_type, ['Credentials', 'HasAccessPass'], False),
+                "hasDesktopSso": get(raw_credential_type, ['EstsProperties', 'DesktopSsoEnabled'], False),
+                "hasRemoteNGC": get(raw_credential_type, ['Credentials', 'HasRemoteNGC'], False),
+                "hasFido": get(raw_credential_type, ['Credentials', 'HasFido'], False),
+                "otcNotAutoSent": get(raw_credential_type, ['Credentials', 'OtcNotAutoSent']),
+                "parameters": { # if a parameter is present, it is a dict and should be presented as json in the frontend
+                    "remoteNgc": get(raw_credential_type, ['Credentials', 'RemoteNgcParams']),
+                    "fido": get(raw_credential_type, ['Credentials', 'FidoParams']),
+                    "qrCodePin": get(raw_credential_type, ['Credentials', 'QrCodePinParams']),
+                    "sas": get(raw_credential_type, ['Credentials', 'SasParams']),
+                    "certAuth": get(raw_credential_type, ['Credentials', 'CertAuthParams']),
+                    "google": get(raw_credential_type, ['Credentials', 'GoogleParams']),
+                    "facebook": get(raw_credential_type, ['Credentials', 'FacebookParams']),
+                }
+            },
+            "callMetadata": {
+                "longRunningTransactionPartition": get(raw_credential_type, ['EstsProperties', 'CallMetadata', 'LongRunningTransactionPartition']),
+                "region": get(raw_credential_type, ['EstsProperties', 'CallMetadata', 'Region']),
+                "scaleUnit": get(raw_credential_type, ['EstsProperties', 'CallMetadata', 'ScaleUnit']),
+                "isLongRunningTransaction": get(raw_credential_type, ['EstsProperties', 'CallMetadata', 'IsLongRunningTransaction']),
             }
         },
         "domains": domains,
@@ -260,16 +333,22 @@ def getTenantInfos(search_str: str) -> dict:
             "userrealm_v2": raw_userrealm_v2,
             "userrealm_old": raw_userrealm_old,
             "credential_type": raw_credential_type,
-            "autodiscover_federationInformation": raw_autodiscover_federationInformation,
-            "openid_configuration": raw_openid_configuration
+            "autodiscover_federationInformation": raw_autodiscover_federation_information,
+            "openid_configuration": raw_openid_configuration,
+            "tenant_information": raw_tenant_information
         }
     }
 
 
+getTenantInfos("sorba.ch")
+getTenantInfos("gd.com")
+getTenantInfos("spaceforce.mil")
+getTenantInfos("jd.com")
+
 # Worldwide
-# print(json.dumps(getTenantInfos("sorba.ch"), indent=4))
+#print(json.dumps(, indent=4))
 # print(json.dumps(getTenantInfos("microsoft.com"), indent=4))
-print(json.dumps(getTenantInfos("ethz.ch"), indent=4))
+# print(json.dumps(getTenantInfos("ethz.ch"), indent=4))
 # print(json.dumps(getTenantInfos("airforce.com"), indent=4))
 
 # USGovGCCHigh
