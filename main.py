@@ -1,97 +1,15 @@
 import requests
 import xml.etree.ElementTree as ET
-import json
 from typing import Any
 from fastapi import FastAPI
 import re
+import os
+import static
 
-
-
-from time import time
-def timer_func(func): 
-    # This function shows the execution time of  
-    # the function object passed 
-    def wrap_func(*args, **kwargs): 
-        t1 = time() 
-        result = func(*args, **kwargs) 
-        t2 = time() 
-        print(f'Function {func.__name__!r} executed in {(t2-t1):.4f}s') 
-        return result 
-    return wrap_func 
 
 app = FastAPI()
 
-token = ""
-
-environments = {
-    "Global": { # Worldwide
-        "displayName": "Worldwide",
-        "loginBase": "https://login.microsoftonline.com",
-        "autodiscoverBase": "https://autodiscover-s.outlook.com"
-    },
-    "microsoftonline.us": { # USGovGCCHigh
-        "displayName": "U.S. Government GCC High",
-        "loginBase": "https://login.microsoftonline.us",
-        "autodiscoverBase": "https://autodiscover-s.office365.us",
-    },
-    "microsoftonline.mil": { # USGovDoD
-        "displayName": "U.S. Government DoD",
-        "loginBase": "https://login.microsoftonline.us",
-        "autodiscoverBase": "https://autodiscover-s-dod.office365.us",
-    },
-    "partner.microsoftonline.cn": { # China
-        "displayName": "Microsoft 365 operated by 21Vianet (China)",
-        "loginBase": "https://login.partner.microsoftonline.cn", # login.chinacloudapi.cn
-        "autodiscoverBase": "https://autodiscover-s.partner.outlook.cn",
-    }
-}
-
-throttle_status = {
-    0: "NotThrottled",
-    1: "AadThrottled",
-    2: "MsaThrottled"
-}
-
-credential_type = {
-    0: "None",
-    1: "Password",
-    2: "RemoteNGC",
-    3: "OneTimeCode",
-    4: "Federation",
-    5: "CloudFederation",
-    6: "OtherMicrosoftIdpFederation",
-    7: "Fido",
-    8: "GitHub",
-    9: "PublicIdentifierCode",
-    10: "LinkedIn",
-    11: "RemoteLogin",
-    12: "Google",
-    13: "AccessPass",
-    14: "Facebook",
-    15: "Certificate",
-    16: "OfflineAccount",
-    17: "VerifiableCredential",
-    18: "QrCodePin",
-    1000: "NoPreferredCredential"
-}
-
-domain_type = {
-    1: "Unknown",
-    2: "Consumer",
-    3: "Managed",
-    4: "Federated",
-    5: "CloudFederated"
-}
-
-user_state = {
-    -1: "Unknown",
-    0: "Exists",
-    1: "NotExist",
-    2: "Throttled",
-    4: "Error",
-    5: "ExistsInOtherMicrosoftIDP",
-    6: "ExistsBothIDPs"
-}
+GRAPH_TOKEN = os.environ['GRAPH_TOKEN']
 
 
 def get(dictionary: dict | list, key: list[str | int], default: Any = None) -> Any:
@@ -102,7 +20,6 @@ def get(dictionary: dict | list, key: list[str | int], default: Any = None) -> A
                 return default
             if not k < len(dictionary):
                 return default
-
             dictionary = dictionary[k]
 
         else:
@@ -110,15 +27,13 @@ def get(dictionary: dict | list, key: list[str | int], default: Any = None) -> A
             if not isinstance(dictionary, dict):
                 return default
             if k not in dictionary:
-                return default
-            
+                return default 
             dictionary = dictionary[k]
 
     return dictionary
 
 
 @app.get("/osint/{search_str}")
-@timer_func
 def getTenantInfos(search_str: str) -> dict:
     # check if the search_str is a domain or a username
     if "@" in search_str:
@@ -128,8 +43,6 @@ def getTenantInfos(search_str: str) -> dict:
         domain = search_str
         username = f"admin@{search_str}"
 
-
-    # -- Data gathering --
 
     #region: Get Tenant ID and Environment
     res = requests.get(
@@ -148,27 +61,27 @@ def getTenantInfos(search_str: str) -> dict:
             "error": "Tenant not found"
         }
 
-    tenantId = raw_odc_federationprovider["tenantId"]
-    env = environments[raw_odc_federationprovider["environment"]]
+    TENANT_ID = raw_odc_federationprovider["tenantId"]
+    ENV = static.CLOUD_ENVIRONMENT[raw_odc_federationprovider["environment"]]
     #endregion
 
 
     #region: Tenant Information (Graph API)
-    if env == environments["Global"]:
+    raw_tenant_information = {}
+    if ENV == static.CLOUD_ENVIRONMENT["Global"]:
         res = requests.get(
-            url=f"https://graph.microsoft.com/v1.0/tenantRelationships/findTenantInformationByTenantId(tenantId='{tenantId}')",
+            url=f"https://graph.microsoft.com/v1.0/tenantRelationships/findTenantInformationByTenantId(tenantId='{TENANT_ID}')",
             headers={
-                "Authorization": f"Bearer {token}"
+                "Authorization": f"Bearer {GRAPH_TOKEN}"
             }
         )
         raw_tenant_information = res.json()
-    else:
-        raw_tenant_information = {}
+    #endregion
 
 
     #region: User Realm V1
     res = requests.get(
-        url=f"{env['loginBase']}/common/userrealm/{username}",
+        url=f"{ENV['loginBase']}/common/userrealm/{username}",
         params={
             "api-version": "1.0"
         }
@@ -179,7 +92,7 @@ def getTenantInfos(search_str: str) -> dict:
 
     #region: User Realm V2
     res = requests.get(
-        url=f"{env['loginBase']}/common/userrealm/{username}",
+        url=f"{ENV['loginBase']}/common/userrealm/{username}",
         params={
             "api-version": "2.0"
         }
@@ -190,7 +103,7 @@ def getTenantInfos(search_str: str) -> dict:
 
     #region User Realm old
     res = requests.get(
-        url=f"{env['loginBase']}/GetUserRealm.srf",
+        url=f"{ENV['loginBase']}/GetUserRealm.srf",
         params={
             "login": username
         }
@@ -200,28 +113,30 @@ def getTenantInfos(search_str: str) -> dict:
 
     
     #region: credential type
-    # get sCtx value
-    res = requests.get(
-        url=env["loginBase"]
-    )
-    sCtx = re.search(r'"sCtx":"(.*?)"', res.text).group(1)
+    raw_credential_type = {}
+    if (ENV == static.CLOUD_ENVIRONMENT["Global"] or ENV == static.CLOUD_ENVIRONMENT["partner.microsoftonline.cn"]) and get(raw_userrealm_v2, ['NameSpaceType']) == 'Managed':
+        # get sCtx value
+        res = requests.get(
+            url=ENV["loginBase"]
+        )
+        sCtx = re.search(r'"sCtx":"(.*?)"', res.text).group(1)
 
 
-    res = requests.post(
-        url=f"{env['loginBase']}/common/GetCredentialType",
-        json={
-            "username": username,
-            "isOtherIdpSupported": True,
-            "isRemoteNGCSupported": True,
-            "isFidoSupported": True,
-            "isRemoteConnectSupported": True,
-            "isAccessPassSupported": True,
-            "checkPhones": True,
-            "isExternalFederationDisallowed": False,
-            "originalRequest": sCtx
-        }
-    )
-    raw_credential_type = res.json()
+        res = requests.post(
+            url=f"{ENV['loginBase']}/common/GetCredentialType",
+            json={
+                "username": username,
+                "isOtherIdpSupported": True,
+                "isRemoteNGCSupported": True,
+                "isFidoSupported": True,
+                "isRemoteConnectSupported": True,
+                "isAccessPassSupported": True,
+                "checkPhones": True,
+                "isExternalFederationDisallowed": False,
+                "originalRequest": sCtx
+            }
+        )
+        raw_credential_type = res.json()
     #endregion
 
 
@@ -241,7 +156,7 @@ def getTenantInfos(search_str: str) -> dict:
 </soap:Envelope>"""
     
     res = requests.post(
-        url= env['autodiscoverBase'] + "/autodiscover/autodiscover.svc",
+        url= ENV['autodiscoverBase'] + "/autodiscover/autodiscover.svc",
         data=body,
         headers={
             "Content-Type": "text/xml; charset=utf-8"
@@ -257,20 +172,20 @@ def getTenantInfos(search_str: str) -> dict:
 
     #region: OpenID Configuration
     res = requests.get(
-        url=f"{env['loginBase']}/{domain}/.well-known/openid-configuration"
+        url=f"{ENV['loginBase']}/{domain}/.well-known/openid-configuration"
     )
     raw_openid_configuration = res.json()
     #endregion
 
 
     return {
-        "tenantId": tenantId,
+        "tenantId": TENANT_ID,
         "tenantName": get(raw_userrealm_v2, ['FederationBrandName']),
         "defaultDomain": get(raw_tenant_information, ['defaultDomainName']),
         "tenantEnvironment": {
             "tenantRegionScope": get(raw_openid_configuration, ['tenant_region_scope']),
             "tenantRegionSubScope": get(raw_openid_configuration, ['tenant_region_sub_scope']),
-            "cloudInstanceDisplayName": get(env, ['displayName']),
+            "cloudInstanceDisplayName": get(ENV, ['displayName']),
             "cloudInstance": get(raw_openid_configuration, ['cloud_instance_name']),
             "audienceUrn": get(raw_userrealm_v1, ['cloud_audience_urn'])
         },
@@ -298,11 +213,11 @@ def getTenantInfos(search_str: str) -> dict:
         "userInfo": {
             "username": get(raw_credential_type, ['Username']),
             "displayName": get(raw_credential_type, ['Display']),
-            "state": user_state[get(raw_credential_type, ['IfExistsResult'])],
-            "isManaged": not get(raw_credential_type, ['IsUnmanaged']),
-            "throttleStatus": throttle_status[get(raw_credential_type, ['ThrottleStatus'])],
+            "state": get(static.USER_STATE, [get(raw_credential_type, ['IfExistsResult'])]),
+            "isManaged": not get(raw_credential_type, ['IsUnmanaged']), # todo: gives wrong result if is IsUnmanaged is None
+            "throttleStatus": get(static.THROTTLE_STATUS, [get(raw_credential_type, ['ThrottleStatus'])]),
             "credentials": {
-                "preferedCredential": credential_type[get(raw_credential_type, ['Credentials', 'PrefCredential'])],
+                "preferedCredential": get(static.CREDENTIAL_TYPE, [get(raw_credential_type, ['Credentials', 'PrefCredential'])]),
                 "hasPassword": get(raw_credential_type, ['Credentials', 'HasPassword'], False),
                 "HasAccessPass" : get(raw_credential_type, ['Credentials', 'HasAccessPass'], False),
                 "hasDesktopSso": get(raw_credential_type, ['EstsProperties', 'DesktopSsoEnabled'], False),
@@ -339,11 +254,14 @@ def getTenantInfos(search_str: str) -> dict:
         }
     }
 
-
-getTenantInfos("sorba.ch")
-getTenantInfos("gd.com")
-getTenantInfos("spaceforce.mil")
-getTenantInfos("jd.com")
+import time
+start = time.time()
+print(getTenantInfos("jmueller@sorba.ch"))
+end = time.time()
+print(end - start)
+# getTenantInfos("gd.com")
+# getTenantInfos("spaceforce.mil")
+# getTenantInfos("jd.com")
 
 # Worldwide
 #print(json.dumps(, indent=4))
