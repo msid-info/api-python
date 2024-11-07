@@ -16,5 +16,5 @@
 	"postCreateCommand": "pip3 install --user -r requirements.txt",
 
 	// run the FastAPI server in development mode
-	"initializeCommand": "fastapi dev app/main.py"
+	// "initializeCommand": "fastapi dev app/main.py"
 }
