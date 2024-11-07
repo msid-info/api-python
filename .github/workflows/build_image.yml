@@ -45,7 +45,7 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ github.head_ref }}
+          labels: ${{ github.sha }}
       
       # Generates artifact attestation for the image
       # - name: Generate artifact attestation
