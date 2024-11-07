@@ -1,6 +1,6 @@
 name: Create and publish a Docker image
 
-run-name: "Build and push Docker image: ${{ github.sha }}"
+run-name: "Build Docker image: ${{ github.sha }}"
 
 on:
   push:
@@ -38,6 +38,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: type=sha,prefix=,format=short
 
       # Build and push Docker image to ghcr.io
       - name: Build and push Docker image
@@ -46,7 +47,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
       
       # Generates artifact attestation for the image
