@@ -1,7 +1,6 @@
 import httpx
 import xml.etree.ElementTree as ET
 from fastapi import FastAPI
-import os
 import endpoint
 import asyncio
 from static import (
@@ -13,9 +12,9 @@ from static import (
 )
 
 
-app = FastAPI()
-
-GRAPH_TOKEN = os.environ['GRAPH_TOKEN']
+app = FastAPI(
+    openapi_url=None
+)
 
 
 @app.get("/osint/{search_str}")
@@ -50,7 +49,7 @@ async def getTenantInfos(search_str: str) -> dict:
             task_openid_configuration = tg.create_task(endpoint.get_openid_configuration(client, ENV["loginBase"], domain))
 
             if ENV == CLOUD_ENVIRONMENT["Global"]:
-                task_tenant_information = tg.create_task(endpoint.get_tenant_information(client, GRAPH_TOKEN, TENANT_ID))
+                task_tenant_information = tg.create_task(endpoint.get_tenant_information(client, TENANT_ID))
 
             if (ENV == CLOUD_ENVIRONMENT["Global"] or ENV == CLOUD_ENVIRONMENT["partner.microsoftonline.cn"]):  # and get(raw_userrealm_v2, ['NameSpaceType']) == 'Managed':
                 task_credential_type = tg.create_task(endpoint.get_credential_type(client, ENV["loginBase"], username))
@@ -154,16 +153,8 @@ async def getTenantInfos(search_str: str) -> dict:
         }
 
 
-# main function
-
-
-# print(asyncio.run(getTenantInfos("sorba.ch")))
-# (asyncio.run(getTenantInfos("gd.com")))
-# getTenantInfos("spaceforce.mil")
-# getTenantInfos("jd.com")
-
+## Examples: 
 # Worldwide
-#print(json.dumps(, indent=4))
 # print(json.dumps(getTenantInfos("microsoft.com"), indent=4))
 # print(json.dumps(getTenantInfos("ethz.ch"), indent=4))
 # print(json.dumps(getTenantInfos("airforce.com"), indent=4))

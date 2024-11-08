@@ -9,6 +9,20 @@
 		"ghcr.io/devcontainers/features/docker-in-docker:2": {}
 	},
 
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"GitHub.vscode-github-actions",
+				"GitHub.copilot",
+				"GitHub.copilot-chat"
+			]
+		}
+	},
+
+	"forwardPorts": [
+		8000
+	],
+
 	// load env file in the container
 	"runArgs": ["--env-file",".devcontainer/dev.env"],
 

@@ -1,5 +1,6 @@
 import httpx
 import re
+from graph_token import get_graph_token
 
 
 async def get_federtion_provider(client: httpx.Client, domain: str) -> dict:
@@ -14,7 +15,9 @@ async def get_federtion_provider(client: httpx.Client, domain: str) -> dict:
     return response.json()
 
 
-async def get_tenant_information(client: httpx.Client, graph_token: str, tenant_id: str) -> dict:
+async def get_tenant_information(client: httpx.Client, tenant_id: str) -> dict:
+    graph_token = get_graph_token()
+    print(graph_token)
     response = await client.get(
         url=f"https://graph.microsoft.com/v1.0/tenantRelationships/findTenantInformationByTenantId(tenantId='{tenant_id}')",
         headers={
