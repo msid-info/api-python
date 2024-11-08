@@ -23,9 +23,6 @@
 		8000
 	],
 
-	// load env file in the container
-	"runArgs": ["--env-file",".devcontainer/dev.env"],
-
 	// install python packages
 	"postCreateCommand": "pip3 install --user -r requirements.txt",
 
