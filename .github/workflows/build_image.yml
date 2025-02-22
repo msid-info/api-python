@@ -38,7 +38,9 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: type=sha,prefix=,format=short
+          tags: |
+            type=sha,prefix=,format=short
+            type=raw,value=latest
 
       # Build and push Docker image to registry
       - name: Build and push Docker image
@@ -56,5 +58,4 @@ jobs:
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
           subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
       
